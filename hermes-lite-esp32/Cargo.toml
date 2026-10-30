@@ -1,0 +1,33 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "hermes-lite-esp32"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ESP32 (ESP-IDF std) demo of hermes-lite-core: serial REPL, WiFi provisioning, GPIO/ADC tools"
+
+# kept out of the parent workspace: builds only for xtensa-esp32-espidf
+[workspace]
+
+[dependencies]
+hermes-lite-core = { path = "../hermes-lite-core" }
+anyhow = "1"
+log = "0.4"
+esp-idf-svc = { version = "0.51", features = ["std", "binstart"] }
+esp-idf-hal = "0.45"
+esp-idf-sys = "0.36"
+serde_json = "1"
+
+[build-dependencies]
+embuild = "0.33"
+
+[features]
+default = ["native"]
+native = ["esp-idf-svc/native"]
+
+[profile.release]
+opt-level = "z"
+lto = "off"
+codegen-units = 1
+panic = "immediate-abort"

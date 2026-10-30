@@ -1,0 +1,11 @@
+[package]
+name = "hermes-lite-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Portable no_std agent runtime: OpenAI-compatible chat + tools + agentskills.io skills"
+
+[dependencies]
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]

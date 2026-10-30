@@ -1,0 +1,16 @@
+[build]
+target = "xtensa-esp32-espidf"
+
+[target.xtensa-esp32-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+rustflags = ["--cfg", "espidf", "-Z", "unstable-options"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32"
+# copy partitions.csv into the IDF build project dir (out/) on every build
+ESP_IDF_GLOB_BASE = { value = "..", relative = true }
+ESP_IDF_GLOB_PARTITIONS = "partitions.csv"
