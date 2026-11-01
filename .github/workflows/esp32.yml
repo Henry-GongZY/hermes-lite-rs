@@ -12,8 +12,15 @@ jobs:
           cargo install ldproxy --locked
       - name: Install ESP toolchain
         run: espup install
+      - name: Cache IDF tools
+        uses: actions/cache@v4
+        with:
+          path: hermes-lite-esp32/.embuild
+          key: embuild-${{ runner.os }}-v1
       - name: Build firmware
+        env:
+          RUST_LOG: debug
         run: |
           source "$HOME/export-esp.sh"
           cd hermes-lite-esp32
-          cargo +esp build --release
+          cargo +esp build --release 2>&1 | tail -120
