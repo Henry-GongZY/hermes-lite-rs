@@ -44,7 +44,8 @@ pub fn json_quote(s: &str) -> String {
 }
 
 pub(crate) fn msg_chars(m: &Msg) -> usize {
-    m.role.len() + 16
+    m.role.len()
+        + 16
         + m.content.as_deref().map_or(0, str::len)
         + m.tool_calls.as_deref().map_or(0, str::len)
         + m.tool_call_id.as_deref().map_or(0, str::len)
@@ -151,7 +152,10 @@ impl Agent {
                 tool_call_id,
             });
         }
-        self.platform.log(Level::Debug, &format!("history: {} msgs loaded", self.msgs.len()));
+        self.platform.log(
+            Level::Debug,
+            &format!("history: {} msgs loaded", self.msgs.len()),
+        );
     }
 }
 
@@ -165,17 +169,22 @@ fn t_raw(arr: &Value) -> String {
             }
             let id = tc.get("id").and_then(|x| x.as_str()).unwrap_or("");
             let f = tc.get("function");
-            let name = f.and_then(|x| x.get("name")).and_then(|x| x.as_str()).unwrap_or("");
+            let name = f
+                .and_then(|x| x.get("name"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
             let args = f
                 .and_then(|x| x.get("arguments"))
                 .and_then(|x| x.as_str())
                 .unwrap_or("{}");
-            out.push_str(&json!({
-                "id": id,
-                "type": "function",
-                "function": { "name": name, "arguments": args }
-            })
-            .to_string());
+            out.push_str(
+                &json!({
+                    "id": id,
+                    "type": "function",
+                    "function": { "name": name, "arguments": args }
+                })
+                .to_string(),
+            );
         }
     }
     out.push(']');

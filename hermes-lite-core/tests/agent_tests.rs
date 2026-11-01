@@ -1,10 +1,11 @@
 //! Agent-loop tests against a scripted mock platform — the Rust port of
 //! the C `test_agent.c` suite (same scenarios, same assertions).
+#![allow(clippy::arc_with_non_send_sync)] // single-threaded tests; Rc-style sharing under Arc
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use hermes_lite_core::{Agent, Config, HlError, Level, Platform, Tool};
 use serde_json::json;
@@ -12,7 +13,7 @@ use serde_json::json;
 const MAX_CAP: usize = 16;
 
 #[derive(Default)]
-struct MockState {
+pub struct MockState {
     captured: Vec<String>,
     buffered: Vec<String>,
     streams: Vec<String>,
@@ -20,6 +21,8 @@ struct MockState {
     spos: usize,
     frag_log: String,
     frag_calls: usize,
+    /// transport failures before a scripted response is served
+    fail_first: usize,
 }
 
 pub struct Mock {
@@ -52,6 +55,10 @@ impl Platform for Mock {
         let mut s = self.s.borrow_mut();
         assert!(s.captured.len() < MAX_CAP);
         s.captured.push(body.to_string());
+        if s.fail_first > 0 {
+            s.fail_first -= 1;
+            return Err(HlError::Transport);
+        }
         if s.bpos >= s.buffered.len() {
             return Err(HlError::Transport);
         }
@@ -76,6 +83,10 @@ impl Platform for Mock {
         let mut s = self.s.borrow_mut();
         assert!(s.captured.len() < MAX_CAP);
         s.captured.push(body.to_string());
+        if s.fail_first > 0 {
+            s.fail_first -= 1;
+            return Err(HlError::Transport);
+        }
         if s.spos >= s.streams.len() {
             return Err(HlError::Transport);
         }
@@ -131,15 +142,17 @@ fn resp_reply(text: &str) -> String {
 fn resp_tool_call(id: &str, name: &str, args: &str) -> String {
     json!({"choices":[{"message":{"role":"assistant","content":null,
         "tool_calls":[{"id":id,"type":"function",
-        "function":{"name":name,"arguments":args}}]}}]}).to_string()
+        "function":{"name":name,"arguments":args}}]}}]})
+    .to_string()
 }
 
 fn resp_two_calls(id1: &str, args1: &str, id2: &str, args2: &str) -> String {
     json!({"choices":[{"message":{"role":"assistant","content":null,
-        "tool_calls":[
-            {"id":id1,"type":"function","function":{"name":"add","arguments":args1}},
-            {"id":id2,"type":"function","function":{"name":"add","arguments":args2}}
-        ]}}]}).to_string()
+    "tool_calls":[
+        {"id":id1,"type":"function","function":{"name":"add","arguments":args1}},
+        {"id":id2,"type":"function","function":{"name":"add","arguments":args2}}
+    ]}}]})
+    .to_string()
 }
 
 fn tool_add() -> Tool {
@@ -150,7 +163,10 @@ fn tool_add() -> Tool {
         f: Box::new(|args, out| {
             let v: serde_json::Value =
                 serde_json::from_str(if args.is_empty() { "{}" } else { args }).unwrap();
-            match (v.get("a").and_then(|x| x.as_i64()), v.get("b").and_then(|x| x.as_i64())) {
+            match (
+                v.get("a").and_then(|x| x.as_i64()),
+                v.get("b").and_then(|x| x.as_i64()),
+            ) {
                 (Some(a), Some(b)) => out.push_str(&(a + b).to_string()),
                 _ => out.push_str("error: need a and b"),
             }
@@ -171,12 +187,7 @@ static TMP_N: AtomicU32 = AtomicU32::new(0);
 
 fn tmpdir(tag: &str) -> String {
     let n = TMP_N.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "hl_rs_test_{}_{}_{}",
-        std::process::id(),
-        tag,
-        n
-    ));
+    let dir = std::env::temp_dir().join(format!("hl_rs_test_{}_{}_{}", std::process::id(), tag, n));
     std::fs::create_dir_all(&dir).unwrap();
     dir.to_string_lossy().into_owned()
 }
@@ -232,7 +243,8 @@ fn tool_loop() {
     let (s, mock) = Mock::new(false);
     {
         let mut st = s.borrow_mut();
-        st.buffered.push(resp_tool_call("call_1", "add", "{\"a\":1,\"b\":2}"));
+        st.buffered
+            .push(resp_tool_call("call_1", "add", "{\"a\":1,\"b\":2}"));
         st.buffered.push(resp_reply("the sum is 3"));
     }
     let cfg = base_cfg(&tmpdir("tool"));
@@ -254,8 +266,12 @@ fn parallel_calls() {
     let (s, mock) = Mock::new(false);
     {
         let mut st = s.borrow_mut();
-        st.buffered
-            .push(resp_two_calls("c1", "{\"a\":1,\"b\":2}", "c2", "{\"a\":10,\"b\":20}"));
+        st.buffered.push(resp_two_calls(
+            "c1",
+            "{\"a\":1,\"b\":2}",
+            "c2",
+            "{\"a\":10,\"b\":20}",
+        ));
         st.buffered.push(resp_reply("both done"));
     }
     let cfg = base_cfg(&tmpdir("parallel"));
@@ -330,7 +346,11 @@ fn skills() {
     let (s, mock) = Mock::new(false);
     {
         let mut st = s.borrow_mut();
-        st.buffered.push(resp_tool_call("call_s", "read_skill", "{\"name\":\"demo\"}"));
+        st.buffered.push(resp_tool_call(
+            "call_s",
+            "read_skill",
+            "{\"name\":\"demo\"}",
+        ));
         st.buffered.push(resp_reply("did the skill"));
     }
     let mut cfg = base_cfg(&dir);
@@ -456,6 +476,46 @@ fn stream_fallback() {
     assert_eq!(calls, 1);
     assert_eq!(log, "fallback text");
     assert!(s.borrow().captured[0].contains("\"stream\":false"));
+}
+
+#[test]
+fn http_retry() {
+    let dir = tmpdir("retry");
+    let (s, mock) = Mock::new(false);
+    {
+        let mut st = s.borrow_mut();
+        st.fail_first = 2; // two transport failures, then the scripted reply
+        st.buffered.push(resp_reply("recovered after retries"));
+    }
+    let cfg = base_cfg(&dir);
+    let mut a = Agent::new(cfg, Arc::new(mock), vec![]);
+    let mut reply = String::new();
+    assert!(a.chat("hello", &mut reply).is_ok());
+    assert_eq!(reply, "recovered after retries");
+    assert_eq!(s.borrow().captured.len(), 3);
+}
+
+#[test]
+fn stream_retry_no_duplicate_fragments() {
+    let dir = tmpdir("streamretry");
+    let (s, mock) = Mock::new(true);
+    {
+        let mut st = s.borrow_mut();
+        st.fail_first = 1; // stream transport fails once, before any data
+        st.streams
+            .push("{\"choices\":[{\"delta\":{\"content\":\"only once\"}}]}\n[DONE]".into());
+    }
+    let cfg = base_cfg(&dir);
+    let mut a = Agent::new(cfg, Arc::new(mock), vec![]);
+    let mut reply = String::new();
+    assert!(a
+        .chat_stream("hi", &mut |f| collect_frag(&s, f), &mut reply)
+        .is_ok());
+    assert_eq!(reply, "only once");
+    let (log, calls) = frag_of(&s);
+    assert_eq!(log, "only once", "no duplicated fragments across retry");
+    assert_eq!(calls, 1);
+    assert_eq!(s.borrow().captured.len(), 2);
 }
 
 #[test]

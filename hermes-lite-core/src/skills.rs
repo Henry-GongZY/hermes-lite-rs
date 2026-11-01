@@ -2,9 +2,9 @@
 //! frontmatter. Only name/description are injected into the system prompt;
 //! the LLM pulls the full body via the built-in `read_skill` tool.
 
+use crate::platform::{HlResult, Platform};
 use alloc::format;
 use alloc::string::{String, ToString};
-use crate::platform::{HlResult, Platform};
 
 fn fm_field(text: &str, field: &str) -> Option<String> {
     for line in text.lines() {

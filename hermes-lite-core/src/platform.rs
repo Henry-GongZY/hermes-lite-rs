@@ -79,5 +79,9 @@ pub trait Platform {
     fn fs_list(&self, dir: &str) -> HlResult<Vec<String>>;
 
     fn time_ms(&self) -> u64;
+
+    /// Sleep for backoff between HTTP retries. Default: no-op (instant retry).
+    fn sleep_ms(&self, _ms: u64) {}
+
     fn log(&self, level: Level, msg: &str);
 }

@@ -1,5 +1,8 @@
 # hermes-lite-rs
 
+[![host](https://github.com/Henry-GongZY/hermes-lite-rs/actions/workflows/host.yml/badge.svg)](https://github.com/Henry-GongZY/hermes-lite-rs/actions/workflows/host.yml)
+[![esp32](https://github.com/Henry-GongZY/hermes-lite-rs/actions/workflows/esp32.yml/badge.svg)](https://github.com/Henry-GongZY/hermes-lite-rs/actions/workflows/esp32.yml)
+
 The Rust twin of [hermes-lite](https://github.com/Henry-GongZY/hermes-lite) — same feature set, same
 platform contract, idiomatic Rust: the core is **`no_std` + `alloc`**, the
 platform abstraction is a trait, and backends are separate crates.

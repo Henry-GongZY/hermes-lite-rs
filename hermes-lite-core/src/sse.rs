@@ -81,10 +81,7 @@ pub fn on_line(acc: &mut SseAcc, data: &str) -> bool {
 
     if let Some(tcs) = delta.get("tool_calls").and_then(|x| x.as_array()) {
         for tc in tcs {
-            let idx = tc
-                .get("index")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0) as usize;
+            let idx = tc.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
             if idx >= MAX_STREAM_CALLS {
                 continue;
             }

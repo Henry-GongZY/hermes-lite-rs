@@ -1,15 +1,15 @@
 //! std platform backend for hermes-lite-core: ureq (rustls) HTTP +
 //! std::fs filesystem. The Rust twin of the C `platform_posix.c`.
 
-use std::cell::OnceCell;
 use std::io::{BufRead, Read, Write};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use hermes_lite_core::{HlError, HlResult, Level, Platform};
 
 pub struct StdPlatform {
     agent: ureq::Agent,
-    start: OnceCell<Instant>,
+    start: OnceLock<Instant>,
 }
 
 impl Default for StdPlatform {
@@ -26,7 +26,7 @@ impl StdPlatform {
                 .timeout(Duration::from_secs(300))
                 .redirects(3)
                 .build(),
-            start: OnceCell::new(),
+            start: OnceLock::new(),
         }
     }
 
@@ -190,6 +190,10 @@ impl Platform for StdPlatform {
 
     fn time_ms(&self) -> u64 {
         self.start.get_or_init(Instant::now).elapsed().as_millis() as u64
+    }
+
+    fn sleep_ms(&self, ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
     }
 
     fn log(&self, level: Level, msg: &str) {

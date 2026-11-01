@@ -278,6 +278,10 @@ impl Platform for Esp32Platform {
         unsafe { sys::esp_timer_get_time() as u64 / 1000 }
     }
 
+    fn sleep_ms(&self, ms: u64) {
+        std::thread::sleep(core::time::Duration::from_millis(ms));
+    }
+
     fn log(&self, level: Level, msg: &str) {
         match level {
             Level::Error => log::error!("[hl] {msg}"),

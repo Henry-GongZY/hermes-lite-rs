@@ -7,9 +7,9 @@
 //! agentskills.io compatible); conversation history is JSONL with budget
 //! trimming and in-place compaction.
 //!
-//! Ports implement the [`Platform`] trait — the same seven primitives the C
+//! Ports implement the [`Platform`] trait — the same primitives the C
 //! version uses (buffered POST, optional streaming POST, four filesystem
-//! ops, clock, log) — and get the whole agent loop for free.
+//! ops, clock, delay, log) — and get the whole agent loop for free.
 
 extern crate alloc;
 
@@ -22,4 +22,3 @@ mod sse;
 pub use agent::{Agent, Config, Tool};
 pub use history::json_quote;
 pub use platform::{HlError, HlResult, Level, Platform};
-

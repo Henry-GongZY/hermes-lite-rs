@@ -1,0 +1,19 @@
+name: esp32
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install espup + ldproxy
+        run: |
+          cargo install espup --locked
+          cargo install ldproxy --locked
+      - name: Install ESP toolchain
+        run: espup install
+      - name: Build firmware
+        run: |
+          source "$HOME/export-esp.sh"
+          cd hermes-lite-esp32
+          cargo +esp build --release

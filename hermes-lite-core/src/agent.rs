@@ -13,7 +13,11 @@ use crate::platform::{HlError, HlResult, Level, Platform};
 use crate::skills;
 use crate::sse::{self, SseAcc};
 
+/// Tool callback: (raw arguments JSON, output buffer).
+pub type ToolFn = dyn Fn(&str, &mut String);
+
 const DEF_MAX_ITERS: usize = 6;
+const HL_HTTP_ATTEMPTS: u32 = 3; // 1 initial + 2 retries on transport/429/5xx
 const DEF_CTX_CHARS: usize = 16000;
 
 /// A locally executable tool. `f` receives the raw `arguments` JSON text
@@ -24,7 +28,7 @@ pub struct Tool {
     pub description: &'static str,
     /// JSON Schema, embedded verbatim.
     pub parameters_json: &'static str,
-    pub f: Box<dyn Fn(&str, &mut String)>,
+    pub f: Box<ToolFn>,
 }
 
 #[derive(Clone)]
@@ -205,8 +209,10 @@ impl Agent {
                 .unwrap_or("You are Hermes Lite, a helpful assistant."),
         );
         if let Some(dir) = &self.cfg.skills_dir {
-            sys.push_str("\n\n# Skills\nBefore following instructions from a skill, \
-                          load it with the read_skill tool. Available skills:");
+            sys.push_str(
+                "\n\n# Skills\nBefore following instructions from a skill, \
+                          load it with the read_skill tool. Available skills:",
+            );
             skills::build_index(&*self.platform, dir, &mut sys, self.cfg.skill_file_cap);
         }
 
@@ -309,31 +315,59 @@ impl Agent {
                 let mut acc = SseAcc::new(self.cfg.max_response_bytes);
                 let mut delivered = 0usize;
                 let mut errbuf = String::new();
-                let (st, acc) = {
-                    // deliver content fragments incrementally, one callback
-                    // per completed SSE line (agent.rs C port parity)
-                    let mut cb = |data: &str| -> bool {
-                        if sse::on_line(&mut acc, data) {
-                            return true;
-                        }
-                        if let Some(f) = on_text.as_mut().map(|f| &mut **f) {
-                            let cur = acc.content.len();
-                            if cur > delivered {
-                                f(&acc.content[delivered..cur]);
-                                delivered = cur;
+                let mut attempt: u32 = 0;
+                #[allow(unused_assignments)] // loop always re-assigns before break
+                let mut st = Err(HlError::Transport);
+                loop {
+                    if attempt > 0 {
+                        // fresh accumulator: a retried stream must not double-
+                        // deliver fragments (only retried when nothing arrived)
+                        acc = SseAcc::new(self.cfg.max_response_bytes);
+                        delivered = 0;
+                    }
+                    let res = {
+                        // deliver content fragments incrementally, one callback
+                        // per completed SSE line (agent.rs C port parity)
+                        let mut cb = |data: &str| -> bool {
+                            if sse::on_line(&mut acc, data) {
+                                return true;
                             }
-                        }
-                        false
+                            #[allow(clippy::option_as_ref_deref)]
+                            // clippy suggests as_deref_mut, unavailable for dyn traits
+                            if let Some(f) = on_text.as_mut().map(|f| &mut **f) {
+                                let cur = acc.content.len();
+                                if cur > delivered {
+                                    f(&acc.content[delivered..cur]);
+                                    delivered = cur;
+                                }
+                            }
+                            false
+                        };
+                        self.platform.http_post_stream(
+                            &self.cfg.api_url,
+                            &self.cfg.api_key,
+                            &req,
+                            &mut cb,
+                            &mut errbuf,
+                        )
                     };
-                    let st = self.platform.http_post_stream(
-                        &self.cfg.api_url,
-                        &self.cfg.api_key,
-                        &req,
-                        &mut cb,
-                        &mut errbuf,
+                    let has_data = !acc.content.is_empty() || !acc.slots.is_empty();
+                    let retryable = match &res {
+                        Err(HlError::Transport) => !has_data,
+                        Ok(c) => (*c == 429 || (500..600).contains(c)) && !has_data,
+                        _ => false,
+                    };
+                    st = res;
+                    if !retryable || attempt >= HL_HTTP_ATTEMPTS - 1 {
+                        break;
+                    }
+                    attempt += 1;
+                    self.log(
+                        Level::Info,
+                        &format!("http stream attempt {attempt} failed; backing off"),
                     );
-                    (st, acc)
-                };
+                    self.platform.sleep_ms(500u64 << (attempt - 1));
+                }
                 if acc.err {
                     self.log(Level::Error, "stream too large for memory");
                     return Err(HlError::Overflow);
@@ -346,10 +380,7 @@ impl Agent {
                     Ok(200) => {}
                     Ok(code) => {
                         let snippet: String = errbuf.chars().take(200).collect();
-                        self.log(
-                            Level::Error,
-                            &format!("http {code}: {snippet}"),
-                        );
+                        self.log(Level::Error, &format!("http {code}: {snippet}"));
                         return Err(HlError::Status(code, snippet));
                     }
                 }
@@ -360,24 +391,47 @@ impl Agent {
                     .map(|s| TcRef {
                         id: s.id,
                         name: s.name,
-                        args: if s.args.is_empty() { "{}".into() } else { s.args },
+                        args: if s.args.is_empty() {
+                            "{}".into()
+                        } else {
+                            s.args
+                        },
                     })
                     .collect();
             } else {
-                let mut resp = Vec::new();
-                let st = self.platform.http_post(
-                    &self.cfg.api_url,
-                    &self.cfg.api_key,
-                    &req,
-                    &mut resp,
-                    self.cfg.max_response_bytes,
-                );
-                let st = match st {
+                let mut attempt: u32 = 0;
+                let mut outcome: Result<(u16, Vec<u8>), HlError>;
+                loop {
+                    let mut resp = Vec::new();
+                    let res = self.platform.http_post(
+                        &self.cfg.api_url,
+                        &self.cfg.api_key,
+                        &req,
+                        &mut resp,
+                        self.cfg.max_response_bytes,
+                    );
+                    let retryable = match &res {
+                        Err(HlError::Transport) => true,
+                        Ok(c) => *c == 429 || (500..600).contains(c),
+                        _ => false,
+                    };
+                    outcome = res.map(|code| (code, resp));
+                    if !retryable || attempt >= HL_HTTP_ATTEMPTS - 1 {
+                        break;
+                    }
+                    attempt += 1;
+                    self.log(
+                        Level::Info,
+                        &format!("http attempt {attempt} failed; backing off"),
+                    );
+                    self.platform.sleep_ms(500u64 << (attempt - 1));
+                }
+                let (st, resp) = match outcome {
+                    Ok(pair) => pair,
                     Err(e) => {
                         self.log(Level::Error, "http transport error");
                         return Err(e);
                     }
-                    Ok(c) => c,
                 };
                 if st != 200 {
                     let snippet: String =
