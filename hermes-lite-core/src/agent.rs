@@ -372,10 +372,7 @@ impl Agent {
                 let truncated_here = acc.err;
                 truncated = truncated_here;
                 if truncated_here {
-                    self.log(
-                        Level::Info,
-                        "stream exceeded budget; truncating response",
-                    );
+                    self.log(Level::Info, "stream exceeded budget; truncating response");
                 }
                 match st {
                     Err(e) => {
