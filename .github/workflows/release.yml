@@ -44,10 +44,10 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          cp hermes-lite-rs-esp32/target/xtensa-esp32-espidf/release/bootloader.bin dist/bootloader.bin
-          cp hermes-lite-rs-esp32/target/xtensa-esp32-espidf/release/partition-table.bin dist/partition-table.bin
-          cp hermes-lite-rs-esp32/hermes-lite-rs-esp32.bin dist/hermes-lite-rs-esp32.bin
-          cp hermes-lite-rs-esp32/skills.img dist/skills.img
+          cp hermes-lite-esp32/target/xtensa-esp32-espidf/release/bootloader.bin dist/bootloader.bin
+          cp hermes-lite-esp32/target/xtensa-esp32-espidf/release/partition-table.bin dist/partition-table.bin
+          cp hermes-lite-esp32/hermes-lite-rs-esp32.bin dist/hermes-lite-rs-esp32.bin
+          cp hermes-lite-esp32/skills.img dist/skills.img
           cd dist
           tar czf ../hermes-lite-rs-esp32-firmware.tar.gz *
       - uses: softprops/action-gh-release@v2
