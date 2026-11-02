@@ -15,7 +15,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxml2-dev || true
           # esp-clang needs libxml2.so.2 at runtime; -dev ships the unversioned .so
-          ln -sf /usr/lib/x86_64-linux-gnu/libxml2.so /usr/lib/x86_64-linux-gnu/libxml2.so.2
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libxml2.so /usr/lib/x86_64-linux-gnu/libxml2.so.2
       - name: Install espup + ldproxy
         run: |
           cargo install espup --locked
