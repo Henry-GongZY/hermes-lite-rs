@@ -85,8 +85,9 @@ impl Esp32Platform {
             cstr(&format!("Bearer {auth_bearer}")),
         ];
         let ca = self.ca.lock().unwrap().clone();
+        let url_c = cstr(url); /* must outlive the esp_http_client call */
         let cfg = sys::esp_http_client_config_t {
-            url: cstr(url).as_ptr() as *const _,
+            url: url_c.as_ptr() as *const _,
             method: sys::esp_http_client_method_t_HTTP_METHOD_POST,
             event_handler: Some(evh),
             timeout_ms: 120_000,

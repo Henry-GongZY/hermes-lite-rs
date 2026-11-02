@@ -30,12 +30,16 @@ jobs:
           source "$HOME/export-esp.sh"
           cd hermes-lite-esp32
           cargo +esp build --release
-          python -m esptool --chip esp32 elf2image --flash_mode dio \
+          # the embuild python env is env-name-dependent; use the runner's
+          # python3 for both esptool and the stdlib-only spiffsgen
+          python3 -m pip install esptool
+          python3 -m esptool --chip esp32 elf2image --flash_mode dio \
             --flash_size 4MB --flash_freq 40m -o hermes-lite-rs-esp32.bin \
             target/xtensa-esp32-espidf/release/hermes-lite-esp32
           mkdir -p stage
           cp -r skills stage/
-          python "$IDF_PATH/components/spiffs/spiffsgen.py" --obj-name-len 64 1572864 \
+          IDFDIR=$(ls -d .embuild/espressif/esp-idf/v5.2.3)
+          python3 "$IDFDIR/components/spiffs/spiffsgen.py" --obj-name-len 64 1572864 \
             stage skills.img
       - name: Package
         run: |
