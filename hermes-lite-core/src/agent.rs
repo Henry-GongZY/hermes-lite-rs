@@ -310,6 +310,7 @@ impl Agent {
 
             let content;
             let mut tcs: Vec<TcRef> = Vec::new();
+            let mut truncated = false;
 
             if stream {
                 let mut acc = SseAcc::new(self.cfg.max_response_bytes);
@@ -368,9 +369,13 @@ impl Agent {
                     );
                     self.platform.sleep_ms(500u64 << (attempt - 1));
                 }
-                if acc.err {
-                    self.log(Level::Error, "stream too large for memory");
-                    return Err(HlError::Overflow);
+                let truncated_here = acc.err;
+                truncated = truncated_here;
+                if truncated_here {
+                    self.log(
+                        Level::Info,
+                        "stream exceeded budget; truncating response",
+                    );
                 }
                 match st {
                     Err(e) => {
@@ -491,6 +496,9 @@ impl Agent {
 
             if tcs.is_empty() {
                 reply.push_str(&content);
+                if truncated {
+                    reply.push_str("\n\n[response truncated: exceeded memory budget]");
+                }
                 if !stream {
                     if let Some(f) = on_text.as_deref_mut() {
                         // buffered fallback: one fragment with the whole text

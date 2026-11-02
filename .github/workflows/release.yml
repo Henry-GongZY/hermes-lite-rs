@@ -1,0 +1,45 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  esp32:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install espup + ldproxy
+        run: |
+          cargo install espup --locked
+          cargo install ldproxy --locked
+          espup install
+      - uses: actions/cache@v4
+        with:
+          path: hermes-lite-esp32/.embuild
+          key: embuild-${{ runner.os }}-v1
+      - name: Build firmware
+        run: |
+          source "$HOME/export-esp.sh"
+          cd hermes-lite-esp32
+          cargo +esp build --release
+          python -m esptool --chip esp32 elf2image --flash_mode dio \
+            --flash_size 4MB --flash_freq 40m -o hermes-lite-rs-esp32.bin \
+            target/xtensa-esp32-espidf/release/hermes-lite-esp32
+          mkdir -p stage
+          cp -r skills stage/
+          python "$IDF_PATH/components/spiffs/spiffsgen.py" --obj-name-len 64 1572864 \
+            stage skills.img
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp hermes-lite-rs-esp32/target/xtensa-esp32-espidf/release/bootloader.bin dist/bootloader.bin
+          cp hermes-lite-rs-esp32/target/xtensa-esp32-espidf/release/partition-table.bin dist/partition-table.bin
+          cp hermes-lite-rs-esp32/hermes-lite-rs-esp32.bin dist/hermes-lite-rs-esp32.bin
+          cp hermes-lite-rs-esp32/skills.img dist/skills.img
+          cd dist
+          tar czf ../hermes-lite-rs-esp32-firmware.tar.gz *
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: hermes-lite-rs-esp32-firmware.tar.gz

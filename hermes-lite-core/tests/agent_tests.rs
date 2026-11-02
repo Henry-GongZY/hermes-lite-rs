@@ -553,16 +553,17 @@ fn history_compact() {
 }
 
 #[test]
-fn stream_overflow_budget() {
+fn stream_budget_truncates() {
     let (s, mock) = Mock::new(true);
     s.borrow_mut().streams.push(
         "{\"choices\":[{\"delta\":{\"content\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}]}\n[DONE]"
             .into(),
     );
     let mut cfg = base_cfg(&tmpdir("overflow"));
-    cfg.max_response_bytes = 16; // tiny budget -> acc overflow
+    cfg.max_response_bytes = 16; // tiny budget -> first chunk already over
     let mut a = Agent::new(cfg, Arc::new(mock), vec![]);
     let mut reply = String::new();
     let r = a.chat_stream("hi", &mut |_f| {}, &mut reply);
-    assert!(matches!(r, Err(HlError::Overflow)));
+    assert!(r.is_ok(), "budget overflow degrades instead of failing");
+    assert!(reply.contains("[response truncated: exceeded memory budget]"));
 }

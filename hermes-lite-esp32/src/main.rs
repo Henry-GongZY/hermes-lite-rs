@@ -78,6 +78,40 @@ fn wifi_connect_blocking(
     Ok(())
 }
 
+/* runtime-configurable LLM settings (SPIFFS config file) */
+const CONFIG_PATH: &str = "/spiffs/config.txt";
+
+fn cfg_save(plat: &Esp32Platform, field: &str, value: &str) {
+    // keep one line per field; values never contain newlines
+    let mut lines: Vec<String> = plat
+        .fs_read(CONFIG_PATH, 4096)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with(&format!("{field}=")))
+        .map(|l| l.to_string())
+        .collect();
+    lines.push(format!("{field}={value}"));
+    let body = lines.join("\n") + "\n";
+    let _ = plat.fs_write(CONFIG_PATH, body.as_bytes());
+}
+
+fn cfg_load(plat: &Esp32Platform, field: &str) -> Option<String> {
+    let raw = String::from_utf8_lossy(&plat.fs_read(CONFIG_PATH, 4096).ok()?).into_owned();
+    raw.lines().find_map(|l| {
+        l.strip_prefix(&format!("{field}="))
+            .map(|v| v.to_string())
+    })
+}
+
+fn mask_secret(s: &str) -> String {
+    if s.len() <= 10 {
+        "***".into()
+    } else {
+        format!("{}***", &s[..10])
+    }
+}
+
 /* ---------------- tools (raw sys calls, parity with the C port) ---- */
 
 fn parse_args(args: &str) -> serde_json::Value {
@@ -253,15 +287,38 @@ fn main() -> anyhow::Result<()> {
         buf_hist: 8192,
         ..Config::default()
     };
+    let mut cfg = cfg;
+    // runtime overrides (serial-provisioned, persisted in SPIFFS)
+    if let Some(k) = cfg_load(&plat, "api_key") {
+        if !k.is_empty() {
+            cfg.api_key = k;
+        }
+    }
+    if let Some(u) = cfg_load(&plat, "api_url") {
+        if !u.is_empty() {
+            cfg.api_url = u;
+        }
+    }
+    if let Some(m) = cfg_load(&plat, "model") {
+        if !m.is_empty() {
+            cfg.model = m;
+        }
+    }
 
-    let mut agent = Agent::new(cfg, plat.clone(), vec![
-        tool_gpio_write(),
-        tool_gpio_read(),
-        tool_adc_read(),
-        tool_sys_info(),
-    ]);
+    let tools = || {
+        vec![
+            tool_gpio_write(),
+            tool_gpio_read(),
+            tool_adc_read(),
+            tool_sys_info(),
+        ]
+    };
+    let mut agent = Agent::new(cfg.clone(), plat.clone(), tools());
 
-    println!("commands: 'wifi <ssid> <pass>' | 'skills' | 'reset' | 'free'");
+    println!(
+        "commands: 'wifi <ssid> <pass>' | 'key <api-key>' | 'url <endpoint>' | \
+         'model <name>' | 'reconnect' | 'skills' | 'reset' | 'free'"
+    );
 
     let mut line = String::new();
     loop {
@@ -292,6 +349,36 @@ fn main() -> anyhow::Result<()> {
                     "connect failed"
                 }
             );
+        } else if let Some(rest) = msg.strip_prefix("key ") {
+            let key = rest.trim_start();
+            cfg_save(&plat, "api_key", key);
+            cfg.api_key = key.to_string();
+            println!("[app] api key set ({}); 'reset' to apply", mask_secret(key));
+        } else if let Some(rest) = msg.strip_prefix("url ") {
+            let u = rest.trim_start();
+            cfg_save(&plat, "api_url", u);
+            cfg.api_url = u.to_string();
+            println!("[app] endpoint set: {u}; 'reset' to apply");
+        } else if let Some(rest) = msg.strip_prefix("model ") {
+            let m = rest.trim_start();
+            cfg_save(&plat, "model", m);
+            cfg.model = m.to_string();
+            println!("[app] model set: {m}; 'reset' to apply");
+        } else if msg == "reconnect" {
+            match wifi_load(&plat) {
+                Some((ssid, pass)) => {
+                    println!("[app] reconnecting to '{ssid}'...");
+                    println!(
+                        "[app] {}",
+                        if wifi_connect_blocking(&mut wifi, &ssid, &pass).is_ok() {
+                            "wifi connected"
+                        } else {
+                            "connect failed"
+                        }
+                    );
+                }
+                None => println!("[app] no saved credentials; use 'wifi <ssid> <pass>'"),
+            }
         } else if msg == "skills" {
             println!("skills in {SKILLS_DIR}:");
             for name in platform_fs_list(&plat) {
@@ -299,13 +386,7 @@ fn main() -> anyhow::Result<()> {
             }
         } else if msg == "reset" {
             let _ = plat.fs_write(HISTORY_PATH, b"");
-            let cfg = agent.config().clone();
-            agent = Agent::new(cfg, plat.clone(), vec![
-                tool_gpio_write(),
-                tool_gpio_read(),
-                tool_adc_read(),
-                tool_sys_info(),
-            ]);
+            agent = Agent::new(cfg.clone(), plat.clone(), tools());
             println!("[app] agent restarted, history wiped");
         } else if msg == "free" {
             println!(
