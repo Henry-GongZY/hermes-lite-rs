@@ -1,11 +1,28 @@
 //! Terminal demo — the Rust twin of `examples/linux/main.c`:
-//! chat with exec/time tools, skills dir, streaming output.
+//! chat with exec/time tools, skills dir, streaming output, named sessions.
 
 use std::io::Write;
 use std::process::Command;
 
 use hermes_lite_core::{Agent, Config, Tool};
 use hermes_lite_std::platform;
+
+const SESSIONS_DIR: &str = "sessions";
+
+/// Per-name JSONL history file under the sessions dir.
+fn session_path(name: &str) -> String {
+    format!("{SESSIONS_DIR}/{name}.jsonl")
+}
+
+/// Session names must be plain single path components (no separators,
+/// no traversal, not hidden).
+fn valid_session_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains('\\')
+        && name != ".."
+}
 
 fn tool_exec() -> Tool {
     Tool {
@@ -93,14 +110,18 @@ fn main() {
     let key = std::env::var("HL_API_KEY").unwrap_or_default();
     let model = std::env::var("HL_MODEL").unwrap_or_else(|_| "gpt-6.1-terra".into());
     let skills = std::env::var("HL_SKILLS_DIR").unwrap_or_else(|_| "skills".into());
-    let hist = std::env::var("HL_HISTORY").unwrap_or_else(|_| "history.jsonl".into());
+    let session = std::env::var("HL_SESSION").unwrap_or_else(|_| "default".into());
 
     if key.is_empty() {
         eprintln!("usage: HL_API_KEY=sk-... hermes-lite");
         std::process::exit(1);
     }
 
-    let cfg = Config {
+    // session storage: one JSONL history file per session name under ./sessions/
+    let _ = std::fs::create_dir_all(SESSIONS_DIR);
+    let mut history_path = session_path(&session);
+
+    let mut cfg = Config {
         api_url: url,
         api_key: key,
         model,
@@ -111,16 +132,17 @@ fn main() {
                 .into(),
         ),
         skills_dir: Some(skills),
-        history_path: Some(hist),
+        history_path: Some(history_path.clone()),
         max_ctx_chars: 24000,
         ..Config::default()
     };
 
-    let tools = vec![tool_exec(), tool_time_now()];
-    let mut agent = Agent::new(cfg, platform(), tools);
+    let tools = || vec![tool_exec(), tool_time_now()];
+    let mut agent = Agent::new(cfg.clone(), platform(), tools());
 
     println!(
-        "hermes-lite (rust) | model={} | type 'quit' to exit",
+        "hermes-lite (rust) | model={} | session='{session}' | \
+         commands: sessions | session <name> | quit",
         agent.config().model
     );
 
@@ -139,6 +161,41 @@ fn main() {
         }
         if msg == "quit" || msg == "exit" {
             break;
+        }
+        if msg == "sessions" {
+            println!("sessions in {SESSIONS_DIR}/:");
+            let names: Vec<String> = std::fs::read_dir(SESSIONS_DIR)
+                .map(|it| {
+                    it.flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|n| !n.starts_with('.'))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if names.is_empty() {
+                println!("  (none yet)");
+            } else {
+                for name in names {
+                    println!("  {name}");
+                }
+            }
+            continue;
+        }
+        if msg == "session" {
+            println!("usage: session <name>");
+            continue;
+        }
+        if let Some(rest) = msg.strip_prefix("session ") {
+            let name = rest.trim();
+            if !valid_session_name(name) {
+                println!("usage: session <name> (plain name, no '/', '..' or leading '.')");
+            } else {
+                history_path = session_path(name);
+                cfg.history_path = Some(history_path.clone());
+                agent = Agent::new(cfg.clone(), platform(), tools());
+                println!("session '{name}' active ({history_path})");
+            }
+            continue;
         }
         let t0 = std::time::Instant::now();
         print!("\x1b[33mhermes>\x1b[0m ");

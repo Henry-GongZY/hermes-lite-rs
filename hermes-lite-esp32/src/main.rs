@@ -4,7 +4,9 @@
 //! Serial commands:
 //!   wifi <ssid> <password>   provision + connect (persisted to SPIFFS)
 //!   skills                   list skill files
-//!   reset                    wipe conversation history and restart the agent
+//!   sessions                 list session history files
+//!   session <name>           switch to another session (rebuilds the agent)
+//!   reset                    wipe the current session history and restart
 //!   free                     show heap usage
 //!   anything else            goes to the agent
 
@@ -25,8 +27,24 @@ use platform::Esp32Platform;
 mod platform;
 
 const SPIFFS_BASE: &str = "/spiffs";
-const HISTORY_PATH: &str = "/spiffs/history.jsonl";
+const SESSIONS_DIR: &str = "/spiffs/sessions";
+const DEFAULT_SESSION: &str = "default";
 const SKILLS_DIR: &str = "/spiffs/skills";
+
+/// Per-name JSONL history file under the sessions dir.
+fn session_path(name: &str) -> String {
+    format!("{SESSIONS_DIR}/{name}.jsonl")
+}
+
+/// Session names must be plain single path components (no separators,
+/// no traversal, not hidden).
+fn valid_session_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains('\\')
+        && name != ".."
+}
 
 fn mount_spiffs() {
     let conf = sys::esp_vfs_spiffs_conf_t {
@@ -211,6 +229,196 @@ fn tool_adc_read() -> Tool {
     }
 }
 
+fn tool_pwm_write() -> Tool {
+    Tool {
+        name: "pwm_write",
+        description: "Write a PWM duty cycle to a pin via LEDC timer0/channel0 \
+                      (5 kHz, 10-bit). Args: pin (0-39, not 6/11-17), duty (0-1023).",
+        parameters_json: "{\"type\":\"object\",\"properties\":{\"pin\":{\"type\":\"integer\"},\
+                          \"duty\":{\"type\":\"integer\"}},\"required\":[\"pin\",\"duty\"]}",
+        f: Box::new(|args, out| {
+            let v = parse_args(args);
+            let (Some(pin), Some(duty)) = (jnum(&v, "pin"), jnum(&v, "duty")) else {
+                out.push_str("error: need pin (int) and duty (0-1023)");
+                return;
+            };
+            let p = pin as i32;
+            if !(0..=39).contains(&p) || p == 6 || (11..=17).contains(&p) {
+                out.push_str(&format!("error: pin {p} not usable (flash/PSRAM pins)"));
+                return;
+            }
+            let duty = duty as u32;
+            if duty > 1023 {
+                out.push_str("error: duty must be 0-1023");
+                return;
+            }
+            unsafe {
+                let timer = sys::ledc_timer_config_t {
+                    speed_mode: sys::ledc_mode_t_LEDC_LOW_SPEED_MODE,
+                    duty_resolution: sys::ledc_timer_bit_t_LEDC_TIMER_10_BIT,
+                    timer_num: sys::ledc_timer_t_LEDC_TIMER_0,
+                    freq_hz: 5000,
+                    clk_cfg: sys::soc_periph_ledc_clk_src_legacy_t_LEDC_AUTO_CLK,
+                    deconfigure: false,
+                };
+                sys::ledc_timer_config(&timer);
+                let ch = sys::ledc_channel_config_t {
+                    gpio_num: p,
+                    speed_mode: sys::ledc_mode_t_LEDC_LOW_SPEED_MODE,
+                    channel: sys::ledc_channel_t_LEDC_CHANNEL_0,
+                    intr_type: sys::ledc_intr_type_t_LEDC_INTR_DISABLE,
+                    timer_sel: sys::ledc_timer_t_LEDC_TIMER_0,
+                    duty,
+                    hpoint: 0,
+                    flags: Default::default(),
+                };
+                sys::ledc_channel_config(&ch);
+            }
+            out.push_str(&format!("ok: GPIO{p} PWM duty {duty}/1023 (5 kHz, LEDC ch0)"));
+        }),
+    }
+}
+
+fn tool_i2c_scan() -> Tool {
+    Tool {
+        name: "i2c_scan",
+        description: "Scan the I2C bus (SDA=21, SCL=22) and list found device addresses.",
+        parameters_json: "{\"type\":\"object\",\"properties\":{}}",
+        f: Box::new(|_args, out| {
+            // lazy one-time bus init (same pattern as the C adc width init)
+            static INIT: std::sync::Once = std::sync::Once::new();
+            INIT.call_once(|| unsafe {
+                let conf = sys::i2c_config_t {
+                    mode: sys::i2c_mode_t_I2C_MODE_MASTER,
+                    sda_io_num: 21,
+                    scl_io_num: 22,
+                    sda_pullup_en: true,
+                    scl_pullup_en: true,
+                    __bindgen_anon_1: sys::i2c_config_t__bindgen_ty_1 {
+                        master: sys::i2c_config_t__bindgen_ty_1__bindgen_ty_1 {
+                            clk_speed: 100_000,
+                        },
+                    },
+                    clk_flags: 0,
+                };
+                sys::i2c_param_config(sys::i2c_port_t_I2C_NUM_0, &conf);
+                sys::i2c_driver_install(
+                    sys::i2c_port_t_I2C_NUM_0,
+                    sys::i2c_mode_t_I2C_MODE_MASTER,
+                    0,
+                    0,
+                    0,
+                );
+            });
+            let mut found: Vec<String> = Vec::new();
+            for addr in 0x03u8..=0x77 {
+                let cmd = unsafe { sys::i2c_cmd_link_create() };
+                if cmd.is_null() {
+                    out.push_str("error: i2c command alloc failed");
+                    return;
+                }
+                let ok = unsafe {
+                    sys::i2c_master_start(cmd);
+                    // raw address write: 0 = write bit; a device ACKs if present
+                    sys::i2c_master_write_byte(cmd, addr << 1, true);
+                    sys::i2c_master_stop(cmd);
+                    let r = sys::i2c_master_cmd_begin(sys::i2c_port_t_I2C_NUM_0, cmd, 100);
+                    sys::i2c_cmd_link_delete(cmd);
+                    r == sys::ESP_OK
+                };
+                if ok {
+                    found.push(format!("0x{addr:02X}"));
+                }
+            }
+            if found.is_empty() {
+                out.push_str("no I2C devices found (SDA=21, SCL=22)");
+            } else {
+                out.push_str(&format!(
+                    "found {} device(s) on SDA=21/SCL=22: {}",
+                    found.len(),
+                    found.join(", ")
+                ));
+            }
+        }),
+    }
+}
+
+/// file_read/file_write paths must stay inside SPIFFS.
+fn check_spiffs_path(path: &str) -> Result<(), String> {
+    if !path.starts_with(&format!("{SPIFFS_BASE}/")) {
+        return Err("error: path must be under /spiffs/".into());
+    }
+    if path.split('/').any(|seg| seg == "..") {
+        return Err("error: path must not contain '..'".into());
+    }
+    Ok(())
+}
+
+const FILE_TOOL_CAP: usize = 2048;
+
+fn tool_file_read(plat: std::sync::Arc<Esp32Platform>) -> Tool {
+    Tool {
+        name: "file_read",
+        description: "Read a text file from SPIFFS (max 2 KB). Args: path (under /spiffs/).",
+        parameters_json: "{\"type\":\"object\",\"properties\":{\"path\":\
+                          {\"type\":\"string\"}},\"required\":[\"path\"]}",
+        f: Box::new(move |args, out| {
+            let v = parse_args(args);
+            let Some(path) = v.get("path").and_then(|x| x.as_str()) else {
+                out.push_str("error: need path (string)");
+                return;
+            };
+            if let Err(e) = check_spiffs_path(path) {
+                out.push_str(&e);
+                return;
+            }
+            match plat.fs_read(path, FILE_TOOL_CAP) {
+                Ok(bytes) => {
+                    if bytes.is_empty() {
+                        out.push_str(&format!("{path}: (empty)"));
+                    } else {
+                        out.push_str(&String::from_utf8_lossy(&bytes));
+                    }
+                }
+                Err(_) => out.push_str(&format!("error: cannot read {path}")),
+            }
+        }),
+    }
+}
+
+fn tool_file_write(plat: std::sync::Arc<Esp32Platform>) -> Tool {
+    Tool {
+        name: "file_write",
+        description: "Write text to a file on SPIFFS (max 2 KB, overwrites). \
+                      Args: path (under /spiffs/), content.",
+        parameters_json: "{\"type\":\"object\",\"properties\":{\"path\":\
+                          {\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\
+                          \"required\":[\"path\",\"content\"]}",
+        f: Box::new(move |args, out| {
+            let v = parse_args(args);
+            let (Some(path), Some(content)) = (
+                v.get("path").and_then(|x| x.as_str()),
+                v.get("content").and_then(|x| x.as_str()),
+            ) else {
+                out.push_str("error: need path (string) and content (string)");
+                return;
+            };
+            if let Err(e) = check_spiffs_path(path) {
+                out.push_str(&e);
+                return;
+            }
+            if content.len() > FILE_TOOL_CAP {
+                out.push_str("error: content too large (max 2048 bytes)");
+                return;
+            }
+            match plat.fs_write(path, content.as_bytes()) {
+                Ok(()) => out.push_str(&format!("ok: wrote {} bytes to {path}", content.len())),
+                Err(_) => out.push_str(&format!("error: cannot write {path}")),
+            }
+        }),
+    }
+}
+
 fn tool_sys_info() -> Tool {
     Tool {
         name: "sys_info",
@@ -251,6 +459,8 @@ fn main() -> anyhow::Result<()> {
     mount_spiffs();
 
     let plat = Arc::new(Esp32Platform::new());
+    // per-session JSONL histories live here; make sure the dir exists
+    let _ = std::fs::create_dir_all(SESSIONS_DIR);
     // CA for https:// goes here: plat.set_ca(include_bytes!("ca.pem"));
 
     let peripherals = Peripherals::take()?;
@@ -271,6 +481,10 @@ fn main() -> anyhow::Result<()> {
         println!("[app] no wifi credentials; send 'wifi <ssid> <pass>' over serial");
     }
 
+    // session storage: one JSONL history file per session name, owned here so
+    // it stays alive as long as the REPL runs
+    let mut history_path = session_path(DEFAULT_SESSION);
+
     let cfg = Config {
         api_url: env_or("HL_API_URL", "https://www.sui-xiang.net/v1/chat/completions"),
         api_key: env_or("HL_API_KEY", ""),
@@ -281,7 +495,7 @@ fn main() -> anyhow::Result<()> {
                 .into(),
         ),
         skills_dir: Some(SKILLS_DIR.into()),
-        history_path: Some(HISTORY_PATH.into()),
+        history_path: Some(history_path.clone()),
         max_ctx_chars: 8000,
         max_response_bytes: 24576,
         buf_hist: 8192,
@@ -306,18 +520,24 @@ fn main() -> anyhow::Result<()> {
     }
 
     let tools = || {
+        let plat = Arc::new(Esp32Platform::new());
         vec![
             tool_gpio_write(),
             tool_gpio_read(),
             tool_adc_read(),
             tool_sys_info(),
+            tool_pwm_write(),
+            tool_i2c_scan(),
+            tool_file_read(plat.clone()),
+            tool_file_write(plat),
         ]
     };
     let mut agent = Agent::new(cfg.clone(), plat.clone(), tools());
 
     println!(
         "commands: 'wifi <ssid> <pass>' | 'key <api-key>' | 'url <endpoint>' | \
-         'model <name>' | 'reconnect' | 'skills' | 'reset' | 'free'"
+         'model <name>' | 'reconnect' | 'skills' | 'sessions' | 'session <name>' | \
+         'reset' | 'free'"
     );
 
     let mut line = String::new();
@@ -384,10 +604,35 @@ fn main() -> anyhow::Result<()> {
             for name in platform_fs_list(&plat) {
                 skills_file_cb(&name);
             }
+        } else if msg == "sessions" {
+            println!("sessions in {SESSIONS_DIR}:");
+            match plat.fs_list(SESSIONS_DIR) {
+                Ok(names) if !names.is_empty() => {
+                    for name in names {
+                        if !name.starts_with('.') {
+                            println!("  {name}");
+                        }
+                    }
+                }
+                _ => println!("  (none yet)"),
+            }
+        } else if msg == "session" {
+            println!("usage: session <name>");
+        } else if let Some(rest) = msg.strip_prefix("session ") {
+            let name = rest.trim();
+            if !valid_session_name(name) {
+                println!("usage: session <name> (plain name, no '/', '..' or leading '.')");
+            } else {
+                history_path = session_path(name);
+                cfg.history_path = Some(history_path.clone());
+                agent = Agent::new(cfg.clone(), plat.clone(), tools());
+                println!("[app] session '{name}' active ({history_path})");
+            }
         } else if msg == "reset" {
-            let _ = plat.fs_write(HISTORY_PATH, b"");
+            // wipe the CURRENT session's history file, then rebuild the agent
+            let _ = plat.fs_write(&history_path, b"");
             agent = Agent::new(cfg.clone(), plat.clone(), tools());
-            println!("[app] agent restarted, history wiped");
+            println!("[app] agent restarted, history wiped ({history_path})");
         } else if msg == "free" {
             println!(
                 "free_heap={} min_free={}",
