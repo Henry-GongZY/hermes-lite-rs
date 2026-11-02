@@ -554,16 +554,34 @@ fn history_compact() {
 
 #[test]
 fn stream_budget_truncates() {
+    // mirrors the C test_stream_budget_truncates: with buf_resp=16 a single
+    // 40-byte streamed chunk degrades to an empty partial reply plus the
+    // truncation notice, the over-budget fragment is never delivered, and the
+    // assistant history message keeps only the partial content
+    let dir = tmpdir("overflow");
+    let hpath = format!("{dir}/budget.jsonl");
     let (s, mock) = Mock::new(true);
     s.borrow_mut().streams.push(
         "{\"choices\":[{\"delta\":{\"content\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}]}\n[DONE]"
             .into(),
     );
-    let mut cfg = base_cfg(&tmpdir("overflow"));
+    let mut cfg = base_cfg(&dir);
+    cfg.history_path = Some(hpath.clone());
     cfg.max_response_bytes = 16; // tiny budget -> first chunk already over
     let mut a = Agent::new(cfg, Arc::new(mock), vec![]);
     let mut reply = String::new();
-    let r = a.chat_stream("hi", &mut |_f| {}, &mut reply);
+    let mut frag_calls = 0usize;
+    let r = a.chat_stream("hi", &mut |_f| frag_calls += 1, &mut reply);
     assert!(r.is_ok(), "budget overflow degrades instead of failing");
     assert!(reply.contains("[response truncated: exceeded memory budget]"));
+    assert_eq!(frag_calls, 0, "over-budget fragment not delivered");
+    // the assistant history message holds only the partial content (here:
+    // nothing survived the budget, so an empty content string)
+    let buf = std::fs::read(&hpath).unwrap();
+    let text = String::from_utf8_lossy(&buf);
+    assert!(
+        text.contains("{\"role\":\"assistant\",\"content\":\"\"}"),
+        "assistant history keeps only the partial content"
+    );
+    assert!(!text.contains("aaaa"), "over-budget text not persisted");
 }

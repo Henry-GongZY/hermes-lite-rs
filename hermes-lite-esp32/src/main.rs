@@ -247,8 +247,8 @@ fn tool_pwm_write() -> Tool {
                 out.push_str(&format!("error: pin {p} not usable (flash/PSRAM pins)"));
                 return;
             }
-            let duty = duty as u32;
-            if duty > 1023 {
+            let d = duty as i32;
+            if !(0..=1023).contains(&d) {
                 out.push_str("error: duty must be 0-1023");
                 return;
             }
@@ -268,13 +268,13 @@ fn tool_pwm_write() -> Tool {
                     channel: sys::ledc_channel_t_LEDC_CHANNEL_0,
                     intr_type: sys::ledc_intr_type_t_LEDC_INTR_DISABLE,
                     timer_sel: sys::ledc_timer_t_LEDC_TIMER_0,
-                    duty,
+                    duty: d as u32,
                     hpoint: 0,
                     flags: Default::default(),
                 };
                 sys::ledc_channel_config(&ch);
             }
-            out.push_str(&format!("ok: GPIO{p} PWM duty {duty}/1023 (5 kHz, LEDC ch0)"));
+            out.push_str(&format!("ok: GPIO{p} PWM duty {d}/1023 (5 kHz, LEDC ch0)"));
         }),
     }
 }
@@ -285,9 +285,10 @@ fn tool_i2c_scan() -> Tool {
         description: "Scan the I2C bus (SDA=21, SCL=22) and list found device addresses.",
         parameters_json: "{\"type\":\"object\",\"properties\":{}}",
         f: Box::new(|_args, out| {
-            // lazy one-time bus init (same pattern as the C adc width init)
-            static INIT: std::sync::Once = std::sync::Once::new();
-            INIT.call_once(|| unsafe {
+            // lazy one-time bus init on the common devkit pins (SDA=21, SCL=22);
+            // the init result is remembered so failures are reported on every call
+            static I2C_INIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let ready = *I2C_INIT.get_or_init(|| unsafe {
                 let conf = sys::i2c_config_t {
                     mode: sys::i2c_mode_t_I2C_MODE_MASTER,
                     sda_io_num: 21,
@@ -301,30 +302,31 @@ fn tool_i2c_scan() -> Tool {
                     },
                     clk_flags: 0,
                 };
-                sys::i2c_param_config(sys::i2c_port_t_I2C_NUM_0, &conf);
-                sys::i2c_driver_install(
-                    sys::i2c_port_t_I2C_NUM_0,
-                    sys::i2c_mode_t_I2C_MODE_MASTER,
-                    0,
-                    0,
-                    0,
-                );
+                sys::i2c_param_config(sys::i2c_port_t_I2C_NUM_0, &conf) == sys::ESP_OK
+                    && sys::i2c_driver_install(
+                        sys::i2c_port_t_I2C_NUM_0,
+                        sys::i2c_mode_t_I2C_MODE_MASTER,
+                        0,
+                        0,
+                        0,
+                    ) == sys::ESP_OK
             });
+            if !ready {
+                out.push_str("error: i2c init failed (SDA=21, SCL=22)");
+                return;
+            }
             let mut found: Vec<String> = Vec::new();
             for addr in 0x03u8..=0x77 {
-                let cmd = unsafe { sys::i2c_cmd_link_create() };
-                if cmd.is_null() {
-                    out.push_str("error: i2c command alloc failed");
-                    return;
-                }
+                // 1-byte probe: an ACK of the address means a device responded
+                let dummy = 0u8;
                 let ok = unsafe {
-                    sys::i2c_master_start(cmd);
-                    // raw address write: 0 = write bit; a device ACKs if present
-                    sys::i2c_master_write_byte(cmd, addr << 1, true);
-                    sys::i2c_master_stop(cmd);
-                    let r = sys::i2c_master_cmd_begin(sys::i2c_port_t_I2C_NUM_0, cmd, 100);
-                    sys::i2c_cmd_link_delete(cmd);
-                    r == sys::ESP_OK
+                    sys::i2c_master_write_to_device(
+                        sys::i2c_port_t_I2C_NUM_0,
+                        addr,
+                        &dummy,
+                        1,
+                        100, // pdMS_TO_TICKS(100) at the default 1000 Hz tick
+                    ) == sys::ESP_OK
                 };
                 if ok {
                     found.push(format!("0x{addr:02X}"));
@@ -334,8 +336,7 @@ fn tool_i2c_scan() -> Tool {
                 out.push_str("no I2C devices found (SDA=21, SCL=22)");
             } else {
                 out.push_str(&format!(
-                    "found {} device(s) on SDA=21/SCL=22: {}",
-                    found.len(),
+                    "found device(s) on SDA=21/SCL=22: {}",
                     found.join(", ")
                 ));
             }
@@ -400,7 +401,7 @@ fn tool_file_write(plat: std::sync::Arc<Esp32Platform>) -> Tool {
                 v.get("path").and_then(|x| x.as_str()),
                 v.get("content").and_then(|x| x.as_str()),
             ) else {
-                out.push_str("error: need path (string) and content (string)");
+                out.push_str("error: need path (string) and content (string, max 2048)");
                 return;
             };
             if let Err(e) = check_spiffs_path(path) {
