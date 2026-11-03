@@ -208,6 +208,98 @@ impl Platform for Esp32Platform {
         true
     }
 
+    fn http_get(
+        &self,
+        url: &str,
+        auth_bearer: &str,
+        resp: &mut Vec<u8>,
+        resp_cap: usize,
+    ) -> HlResult<u16> {
+        use core::ffi::c_void;
+
+        struct Grx {
+            buf: *mut u8,
+            cap: usize,
+            len: usize,
+            overflow: bool,
+        }
+        unsafe extern "C" fn get_evh(
+            evt: *mut sys::esp_http_client_event_t,
+        ) -> sys::esp_err_t {
+            let e = &*evt;
+            if e.event_id == sys::esp_http_client_event_id_t_HTTP_EVENT_ON_DATA
+                && e.data_len > 0
+            {
+                let rx = e.user_data as *mut Grx;
+                if !rx.is_null() {
+                    let rx = &mut *rx;
+                    let mut n = e.data_len as usize;
+                    let room = rx.cap.saturating_sub(rx.len);
+                    if n > room {
+                        n = room;
+                        rx.overflow = true;
+                    }
+                    core::ptr::copy_nonoverlapping(
+                        e.data as *const u8,
+                        rx.buf.add(rx.len),
+                        n,
+                    );
+                    rx.len += n;
+                }
+            }
+            sys::ESP_OK
+        }
+
+        let mut grx_buf = vec![0u8; resp_cap];
+        let mut grx = Grx {
+            buf: grx_buf.as_mut_ptr(),
+            cap: resp_cap,
+            len: 0,
+            overflow: false,
+        };
+        let ca = self.ca.lock().unwrap().clone();
+        let url_c = cstr(url); /* must outlive the esp_http_client call */
+        let hc = sys::esp_http_client_config_t {
+            url: url_c.as_ptr() as *const _,
+            method: sys::esp_http_client_method_t_HTTP_METHOD_GET,
+            event_handler: Some(get_evh),
+            user_data: &mut grx as *mut Grx as *mut c_void,
+            timeout_ms: 60_000,
+            buffer_size: 4096,
+            crt_bundle_attach: if ca.is_some() {
+                Some(sys::esp_crt_bundle_attach)
+            } else {
+                None
+            },
+            ..Default::default()
+        };
+        let h = unsafe { sys::esp_http_client_init(&hc) };
+        if h.is_null() {
+            return Err(HlError::Transport);
+        }
+        let auth = cstr(&format!("Bearer {auth_bearer}"));
+        unsafe {
+            sys::esp_http_client_set_header(
+                h,
+                b"Authorization\0".as_ptr() as *const _,
+                auth.as_ptr() as *const _,
+            );
+        }
+        let err = unsafe { sys::esp_http_client_perform(h) };
+        let status = unsafe { sys::esp_http_client_get_status_code(h) } as u16;
+        unsafe { sys::esp_http_client_cleanup(h) };
+        if grx.overflow {
+            return Err(HlError::Overflow);
+        }
+        if err != sys::ESP_OK && status == 0 {
+            log::error!("http get transport: {err}");
+            return Err(HlError::Transport);
+        }
+        grx_buf.truncate(grx.len);
+        *resp = grx_buf;
+        Ok(status)
+    }
+
     fn http_post_stream(
         &self,
         url: &str,

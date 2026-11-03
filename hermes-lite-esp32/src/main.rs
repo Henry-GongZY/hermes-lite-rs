@@ -439,6 +439,60 @@ fn tool_sys_info() -> Tool {
     }
 }
 
+/// OTA skill sync: GET <base>/index.json -> {"skills":[{"name","file"}]}
+/// then GET <base>/<file> for each entry, saved as <skills_dir>/<name>.md
+fn do_sync(plat: &Esp32Platform, base: &str, skills_dir: &str) {
+    use hermes_lite_core::Platform;
+    let mut idx: Vec<u8> = Vec::new();
+    let join = |base: &str, tail: &str| {
+        format!(
+            "{}{}{}",
+            base,
+            if base.ends_with('/') { "" } else { "/" },
+            tail
+        )
+    };
+    let idx_url = join(base, "index.json");
+    let st = plat.http_get(&idx_url, "", &mut idx, 4096);
+    if !matches!(st, Ok(200)) {
+        println!("[app] sync: index fetch failed ({st:?})");
+        return;
+    }
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&idx))
+    else {
+        println!("[app] sync: bad index.json");
+        return;
+    };
+    let Some(entries) = root.get("skills").and_then(|s| s.as_array()) else {
+        println!("[app] sync: bad index.json");
+        return;
+    };
+    let mut ok = 0;
+    for e in entries {
+        let Some(name) = e.get("name").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let Some(file) = e.get("file").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        if name.is_empty() || name.starts_with('.') || name.contains('/') {
+            continue;
+        }
+        let mut body: Vec<u8> = Vec::new();
+        let st = plat.http_get(&join(base, file), "", &mut body, 4096);
+        if !matches!(st, Ok(200)) || body.is_empty() {
+            println!("[app] sync: {name} failed ({st:?})");
+            continue;
+        }
+        let path = format!("{skills_dir}/{name}.md");
+        if plat.fs_write(&path, &body).is_ok() {
+            println!("[app] synced skill '{name}' ({} bytes)", body.len());
+            ok += 1;
+        }
+    }
+    println!("[app] sync done: {ok}/{} skills", entries.len());
+}
+
 fn skills_file_cb(name: &str) -> bool {
     if !name.starts_with('.') {
         println!("  {name}");
@@ -467,19 +521,53 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
     let sysloop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
-    let mut wifi = BlockingWifi::wrap(
+    let wifi = Arc::new(std::sync::Mutex::new(BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs))?,
-        sysloop,
-    )?;
+        sysloop.clone(),
+    )?));
 
     if let Some((ssid, pass)) = wifi_load(&plat) {
         println!("[app] connecting to '{ssid}'...");
-        match wifi_connect_blocking(&mut wifi, &ssid, &pass) {
-            Ok(()) => println!("[app] wifi connected"),
-            Err(_) => println!("[app] wifi connect failed; use 'wifi <ssid> <pass>'"),
-        }
+        let ok = wifi
+            .lock()
+            .map(|mut w| wifi_connect_blocking(&mut w, &ssid, &pass).is_ok())
+            .unwrap_or(false);
+        println!("[app] {}", if ok { "wifi connected" } else { "wifi connect failed; use 'wifi <ssid> <pass>'" });
     } else {
         println!("[app] no wifi credentials; send 'wifi <ssid> <pass>' over serial");
+    }
+
+    // background watchdog: poll every 5s; on disconnect, retry with
+    // exponential backoff (2s, 4s, ... capped at 30s), reset on success
+    {
+        let wifi = wifi.clone();
+        let plat = plat.clone();
+        std::thread::Builder::new()
+            .name("wifi_watchdog".into())
+            .stack_size(8192)
+            .spawn(move || {
+                let mut fails: u32 = 0;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let Ok(mut w) = wifi.lock() else { continue };
+                    let connected = matches!(w.is_connected(), Ok(true));
+                    if connected {
+                        fails = 0;
+                        continue;
+                    }
+                    let Some((ssid, pass)) = wifi_load(&plat) else { continue };
+                    fails = fails.saturating_add(1);
+                    let wait = std::cmp::min(30, 2u64 << fails.min(4).saturating_sub(1));
+                    drop(w); // let the REPL use the radio while we back off
+                    std::thread::sleep(std::time::Duration::from_secs(wait));
+                    let Ok(mut w) = wifi.lock() else { continue };
+                    if matches!(w.is_connected(), Ok(true)) {
+                        continue;
+                    }
+                    let _ = wifi_connect_blocking(&mut w, &ssid, &pass);
+                }
+            })
+            .expect("spawn wifi watchdog");
     }
 
     // session storage: one JSONL history file per session name, owned here so
@@ -562,9 +650,13 @@ fn main() -> anyhow::Result<()> {
             };
             wifi_save(&plat, ssid, pass);
             println!("[app] connecting to '{ssid}'...");
+            let ok = wifi
+                .lock()
+                .map(|mut w| wifi_connect_blocking(&mut w, ssid, pass).is_ok())
+                .unwrap_or(false);
             println!(
                 "[app] {}",
-                if wifi_connect_blocking(&mut wifi, ssid, pass).is_ok() {
+                if ok {
                     "wifi connected"
                 } else {
                     "connect failed"
@@ -589,9 +681,13 @@ fn main() -> anyhow::Result<()> {
             match wifi_load(&plat) {
                 Some((ssid, pass)) => {
                     println!("[app] reconnecting to '{ssid}'...");
+                    let ok = wifi
+                        .lock()
+                        .map(|mut w| wifi_connect_blocking(&mut w, &ssid, &pass).is_ok())
+                        .unwrap_or(false);
                     println!(
                         "[app] {}",
-                        if wifi_connect_blocking(&mut wifi, &ssid, &pass).is_ok() {
+                        if ok {
                             "wifi connected"
                         } else {
                             "connect failed"
@@ -600,6 +696,21 @@ fn main() -> anyhow::Result<()> {
                 }
                 None => println!("[app] no saved credentials; use 'wifi <ssid> <pass>'"),
             }
+        } else if let Some(rest) = msg.strip_prefix("sync") {
+            let url = rest.trim_start();
+            let url = if url.is_empty() {
+                match cfg_load(&plat, "sync_url") {
+                    Some(u) if !u.is_empty() => u,
+                    _ => {
+                        println!("[app] no sync url saved; use 'sync <base-url>'");
+                        continue;
+                    }
+                }
+            } else {
+                cfg_save(&plat, "sync_url", url);
+                url.to_string()
+            };
+            do_sync(&plat, &url, SKILLS_DIR);
         } else if msg == "skills" {
             println!("skills in {SKILLS_DIR}:");
             for name in platform_fs_list(&plat) {

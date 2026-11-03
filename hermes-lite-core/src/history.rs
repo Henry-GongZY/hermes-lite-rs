@@ -4,6 +4,7 @@
 
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use serde_json::{json, Value};
 
@@ -77,7 +78,10 @@ impl Agent {
         }
     }
 
-    /// Rewrite the history file keeping only a recent tail.
+    /// Rewrite the history file keeping only a recent tail. Best effort:
+    /// before dropping, the LLM summarizes the dropped tail and the summary
+    /// is written as the thread opener (and spliced into memory), so long
+    /// conversations keep their context instead of losing it.
     pub fn compact(&mut self, keep_chars: usize) {
         let n = self.msgs.len();
         if n == 0 {
@@ -102,11 +106,35 @@ impl Agent {
             };
         }
 
+        // best-effort summary of the dropped tail
+        let summary = if start > 0 {
+            summarize_dropped(self, start)
+        } else {
+            None
+        };
+
         let mut body = String::new();
+        let mut kept: Vec<Msg> = Vec::new();
+        if let Some(s) = &summary {
+            let opener = Msg {
+                role: "user".into(),
+                content: Some(format!("[Earlier conversation summary]\n{s}")),
+                tool_calls: None,
+                tool_call_id: None,
+            };
+            emit_msg(&mut body, &opener);
+            body.push('\n');
+            kept.push(opener);
+        }
         for m in &self.msgs[start..] {
             emit_msg(&mut body, m);
             body.push('\n');
         }
+        kept.extend(self.msgs[start..].iter().cloned());
+
+        // splice the opener into memory so later requests retain the context
+        self.msgs.splice(..start, kept);
+
         if let Some(path) = self.cfg.history_path.clone() {
             if self.platform.fs_write(&path, body.as_bytes()).is_ok() {
                 self.hist_size = body.len();
@@ -189,4 +217,51 @@ fn t_raw(arr: &Value) -> String {
     }
     out.push(']');
     out
+}
+
+/// Ask the LLM for a summary of the messages that compaction is about to
+/// drop. Returns `None` on any failure — compaction is best effort and then
+/// falls back to plain dropping. No retries.
+fn summarize_dropped(a: &mut Agent, n_dropped: usize) -> Option<String> {
+    // transcript of the dropped messages (bounded: newest 8 KB wins)
+    let mut transcript = String::new();
+    for m in &a.msgs[..n_dropped] {
+        emit_msg(&mut transcript, m);
+        transcript.push('\n');
+    }
+    if transcript.chars().count() > 8000 {
+        transcript = transcript
+            .chars()
+            .skip(transcript.chars().count() - 8000)
+            .collect();
+    }
+
+    let body = json!({
+        "model": a.cfg.model,
+        "stream": false,
+        "max_tokens": 220,
+        "messages": [
+            {"role": "system", "content": "Summarize the following conversation \
+             excerpt in under 150 words, preserving key facts, decisions, names, \
+             and open questions. Output only the summary."},
+            {"role": "user", "content": transcript}
+        ]
+    })
+    .to_string();
+
+    let mut resp: Vec<u8> = Vec::new();
+    let st = a
+        .platform
+        .http_post(&a.cfg.api_url, &a.cfg.api_key, &body, &mut resp, 8192);
+    if !matches!(st, Ok(200)) {
+        return None;
+    }
+    let v: Value = serde_json::from_str(&String::from_utf8_lossy(&resp)).ok()?;
+    v.get("choices")?
+        .get(0)?
+        .get("message")?
+        .get("content")?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
 }

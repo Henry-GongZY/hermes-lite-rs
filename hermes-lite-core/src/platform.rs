@@ -70,6 +70,18 @@ pub trait Platform {
         Err(HlError::Unsupported)
     }
 
+    /// Optional buffered HTTPS GET (used by OTA skill sync).
+    /// Default: not implemented — callers must handle the error.
+    fn http_get(
+        &self,
+        _url: &str,
+        _auth_bearer: &str,
+        _resp: &mut Vec<u8>,
+        _resp_cap: usize,
+    ) -> HlResult<u16> {
+        Err(HlError::Unsupported)
+    }
+
     /// Read up to `cap` bytes of `path` (fs::error when absent).
     fn fs_read(&self, path: &str, cap: usize) -> HlResult<Vec<u8>>;
     /// Truncate + write.

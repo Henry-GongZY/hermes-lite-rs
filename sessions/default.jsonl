@@ -1,0 +1,76 @@
+{"role":"user","content":"用一句话回答：1+1 等于几？"}
+{"role":"assistant","content":"1+1 等于 2。"}
+{"role":"user","content":"用一句话回答：1+1 等于几？"}
+{"role":"assistant","content":"1+1 等于 2。"}
+{"role":"user","content":"用一句话回答：1+1 等于几？"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{\"name\":\"short-answers\"}","name":"read_skill"},"id":"call_822b1e74ab25469ca4ff96ee364418af","type":"function"}]}
+{"role":"tool","tool_call_id":"call_822b1e74ab25469ca4ff96ee364418af","content":"---\nname: short-answers\ndescription: How to answer when the user asks for brief replies\n---\n\nWhen the user asks you to be brief or loads this skill, answer in at most two\nshort sentences. No lists, no preamble, no restating the question.\n"}
+{"role":"assistant","content":"2。"}
+{"role":"user","content":"调用 time_now 工具查询当前时间，然后只回复工具返回的时间。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_1be25238d39442df9f195409a248daab","type":"function"}]}
+{"role":"tool","tool_call_id":"call_1be25238d39442df9f195409a248daab","content":"2026-11-03 17:06:09 UTC"}
+{"role":"assistant","content":"2026-11-03 17:06:09 UTC"}
+{"role":"user","content":"调用 time_now 工具查询当前时间，然后只回复工具返回的时间。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_ffc722898ff744e1ab04e4ba144fd8b7","type":"function"}]}
+{"role":"tool","tool_call_id":"call_ffc722898ff744e1ab04e4ba144fd8b7","content":"2026-11-03 17:06:15 UTC"}
+{"role":"assistant","content":"2026-11-03 17:06:15 UTC"}
+{"role":"user","content":"调用 time_now 工具查询当前时间，然后只回复工具返回的时间。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_07023ccf74ce4366a03ce638520304cb","type":"function"}]}
+{"role":"tool","tool_call_id":"call_07023ccf74ce4366a03ce638520304cb","content":"2026-11-03 17:06:32 UTC"}
+{"role":"assistant","content":"2026-11-03 17:06:32 UTC"}
+{"role":"user","content":"依次执行两个工具：先用 time_now 查时间，再用 exec 运行 echo bench-ok，最后汇总。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_b8f50d86f5df47479455ee87d6800f9f","type":"function"}]}
+{"role":"tool","tool_call_id":"call_b8f50d86f5df47479455ee87d6800f9f","content":"2026-11-03 17:06:38 UTC"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{\"command\":\"echo bench-ok\"}","name":"exec"},"id":"call_3ce1eb6266cd4f8e894d50edc595207d","type":"function"}]}
+{"role":"tool","tool_call_id":"call_3ce1eb6266cd4f8e894d50edc595207d","content":"bench-ok"}
+{"role":"assistant","content":"- 当前时间：2026-11-03 17:06:38 UTC\n- 命令输出：`bench-ok`"}
+{"role":"user","content":"依次执行两个工具：先用 time_now 查时间，再用 exec 运行 echo bench-ok，最后汇总。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_09970bca97f14cc88f991d6c94142ee4","type":"function"}]}
+{"role":"tool","tool_call_id":"call_09970bca97f14cc88f991d6c94142ee4","content":"2026-11-03 17:06:48 UTC"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{\"command\":\"echo bench-ok\"}","name":"exec"},"id":"call_2db4c6c32eda49d8b71f3daa30d9fb86","type":"function"}]}
+{"role":"tool","tool_call_id":"call_2db4c6c32eda49d8b71f3daa30d9fb86","content":"bench-ok"}
+{"role":"assistant","content":"- 当前时间：2026-11-03 17:06:48 UTC\n- 命令输出：`bench-ok`"}
+{"role":"user","content":"依次执行两个工具：先用 time_now 查时间，再用 exec 运行 echo bench-ok，最后汇总。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_7d0a9ea9ea7b458db4beaad8a6afbe93","type":"function"}]}
+{"role":"tool","tool_call_id":"call_7d0a9ea9ea7b458db4beaad8a6afbe93","content":"2026-11-03 17:07:02 UTC"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{\"command\":\"echo bench-ok\"}","name":"exec"},"id":"call_76524f694b67478b95ffbeea97f0cfdb","type":"function"}]}
+{"role":"tool","tool_call_id":"call_76524f694b67478b95ffbeea97f0cfdb","content":"bench-ok"}
+{"role":"assistant","content":"时间：2026-11-03 17:07:02 UTC；命令输出：`bench-ok`。"}
+{"role":"user","content":"用一句话回答：1+1 等于几？"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{\"name\":\"short-answers\"}","name":"read_skill"},"id":"call_e77e9699385848ca9f29e3b16e16b184","type":"function"}]}
+{"role":"tool","tool_call_id":"call_e77e9699385848ca9f29e3b16e16b184","content":"---\nname: short-answers\ndescription: How to answer when the user asks for brief replies\n---\n\nWhen the user asks you to be brief or loads this skill, answer in at most two\nshort sentences. No lists, no preamble, no restating the question.\n"}
+{"role":"assistant","content":"2。"}
+{"role":"user","content":"用一句话回答：1+1 等于几？"}
+{"role":"assistant","content":"2。"}
+{"role":"user","content":"用一句话回答：1+1 等于几？"}
+{"role":"assistant","content":"2。"}
+{"role":"user","content":"调用 time_now 工具查询当前时间，然后只回复工具返回的时间。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_b8ddbe80ee0541489b65b11050b10743","type":"function"}]}
+{"role":"tool","tool_call_id":"call_b8ddbe80ee0541489b65b11050b10743","content":"2026-11-03 18:00:42 UTC"}
+{"role":"assistant","content":"2026-11-03 18:00:42 UTC"}
+{"role":"user","content":"调用 time_now 工具查询当前时间，然后只回复工具返回的时间。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_0c56837fc4ad4a7c99b484ffe4d5198d","type":"function"}]}
+{"role":"tool","tool_call_id":"call_0c56837fc4ad4a7c99b484ffe4d5198d","content":"2026-11-03 18:00:47 UTC"}
+{"role":"assistant","content":"2026-11-03 18:00:47 UTC"}
+{"role":"user","content":"调用 time_now 工具查询当前时间，然后只回复工具返回的时间。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_315523e7de4a43e9bbd40ad1a79ca39e","type":"function"}]}
+{"role":"tool","tool_call_id":"call_315523e7de4a43e9bbd40ad1a79ca39e","content":"2026-11-03 18:00:53 UTC"}
+{"role":"assistant","content":""}
+{"role":"user","content":"依次执行两个工具：先用 time_now 查时间，再用 exec 运行 echo bench-ok，最后汇总。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_589a365e50274dedb9681cebcb55aab8","type":"function"}]}
+{"role":"tool","tool_call_id":"call_589a365e50274dedb9681cebcb55aab8","content":"2026-11-03 18:01:04 UTC"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{\"command\":\"echo bench-ok\"}","name":"exec"},"id":"call_3256a1cfc58f4cdf922b7c493493024c","type":"function"}]}
+{"role":"tool","tool_call_id":"call_3256a1cfc58f4cdf922b7c493493024c","content":"bench-ok"}
+{"role":"assistant","content":"时间：2026-11-03 18:01:04 UTC；命令输出：`bench-ok`。"}
+{"role":"user","content":"依次执行两个工具：先用 time_now 查时间，再用 exec 运行 echo bench-ok，最后汇总。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_31c73830e79f478b821dfab0cefa0d23","type":"function"}]}
+{"role":"tool","tool_call_id":"call_31c73830e79f478b821dfab0cefa0d23","content":"2026-11-03 18:01:13 UTC"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{\"command\":\"echo bench-ok\"}","name":"exec"},"id":"call_930a146cb4944fadac48d46adeff1c7e","type":"function"}]}
+{"role":"tool","tool_call_id":"call_930a146cb4944fadac48d46adeff1c7e","content":"bench-ok"}
+{"role":"assistant","content":"时间：2026-11-03 18:01:13 UTC；命令输出：`bench-ok`。"}
+{"role":"user","content":"依次执行两个工具：先用 time_now 查时间，再用 exec 运行 echo bench-ok，最后汇总。"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{}","name":"time_now"},"id":"call_7d458b21ed01422e8f339f0d916258f8","type":"function"}]}
+{"role":"tool","tool_call_id":"call_7d458b21ed01422e8f339f0d916258f8","content":"2026-11-03 18:01:21 UTC"}
+{"role":"assistant","content":null,"tool_calls":[{"function":{"arguments":"{\"command\":\"echo bench-ok\"}","name":"exec"},"id":"call_a9ce7131e251422189d85d407ae21d23","type":"function"}]}
+{"role":"tool","tool_call_id":"call_a9ce7131e251422189d85d407ae21d23","content":"bench-ok"}
+{"role":"assistant","content":"时间：2026-11-03 18:01:21 UTC；命令输出：`bench-ok`。"}

@@ -55,6 +55,15 @@ impl Platform for Mock {
         let mut s = self.s.borrow_mut();
         assert!(s.captured.len() < MAX_CAP);
         s.captured.push(body.to_string());
+        // compaction summary calls are served inline, without consuming the
+        // per-turn script
+        if body.contains("Summarize the following conversation excerpt") {
+            let r = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"summary text\"}}]}";
+            resp.clear();
+            resp.extend_from_slice(r.as_bytes());
+            drop(s);
+            return Ok(200);
+        }
         if s.fail_first > 0 {
             s.fail_first -= 1;
             return Err(HlError::Transport);
@@ -550,6 +559,11 @@ fn history_compact() {
     let text = String::from_utf8_lossy(&buf);
     assert!(text.contains("MSG5"), "latest user msg kept");
     assert!(!text.contains("MSG0"), "oldest msg dropped");
+    // the LLM summary is the thread opener (the \n is JSON-escaped on disk)
+    assert!(
+        text.contains("[Earlier conversation summary]") && text.contains("summary text"),
+        "summary opener present"
+    );
 }
 
 #[test]

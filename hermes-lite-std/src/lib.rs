@@ -104,6 +104,52 @@ impl Platform for StdPlatform {
         true
     }
 
+    fn http_get(
+        &self,
+        url: &str,
+        auth_bearer: &str,
+        resp: &mut Vec<u8>,
+        resp_cap: usize,
+    ) -> HlResult<u16> {
+        let r = self
+            .agent
+            .get(url)
+            .set("Authorization", &format!("Bearer {auth_bearer}"))
+            .call();
+        let (status, mut reader) = match r {
+            Ok(r) => (r.status(), r.into_reader()),
+            Err(ureq::Error::Status(code, r)) => (code, r.into_reader()),
+            Err(e) => {
+                Self::log_line(Level::Error, &format!("curl: {e}"));
+                return Err(HlError::Transport);
+            }
+        };
+        let mut buf = vec![0u8; resp_cap.min(64 * 1024)];
+        let mut total = 0usize;
+        loop {
+            let want = (resp_cap + 1 - total).min(buf.len());
+            if want == 0 {
+                return Err(HlError::Overflow);
+            }
+            match reader.read(&mut buf[..want]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    total += n;
+                    if total > resp_cap {
+                        return Err(HlError::Overflow);
+                    }
+                }
+                Err(e) => {
+                    Self::log_line(Level::Error, &format!("read: {e}"));
+                    return Err(HlError::Transport);
+                }
+            }
+        }
+        resp.clear();
+        resp.extend_from_slice(&buf[..total]);
+        Ok(status)
+    }
+
     fn http_post_stream(
         &self,
         url: &str,

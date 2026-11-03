@@ -162,6 +162,62 @@ fn main() {
         if msg == "quit" || msg == "exit" {
             break;
         }
+        if let Some(rest) = msg.strip_prefix("sync") {
+            // OTA skill sync: GET <base>/index.json -> {"skills":[{name,file}]}
+            let Some(base) = rest.trim_start().strip_suffix("") else {
+                break;
+            };
+            if base.is_empty() {
+                println!("usage: sync <base-url>");
+                continue;
+            }
+            let join =
+                |b: &str, t: &str| format!("{}{}{}", b, if b.ends_with('/') { "" } else { "/" }, t);
+            let plat = platform();
+            let mut idx: Vec<u8> = Vec::new();
+            let st = plat.http_get(&join(base, "index.json"), &cfg.api_key, &mut idx, 65536);
+            if !matches!(st, Ok(200)) {
+                println!("sync: index fetch failed ({st:?})");
+                continue;
+            }
+            let Ok(root) =
+                serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&idx))
+            else {
+                println!("sync: bad index.json");
+                continue;
+            };
+            let Some(entries) = root.get("skills").and_then(|s| s.as_array()) else {
+                println!("sync: bad index.json");
+                continue;
+            };
+            let mut ok = 0;
+            for e in entries {
+                let (Some(name), Some(file)) = (
+                    e.get("name").and_then(|x| x.as_str()),
+                    e.get("file").and_then(|x| x.as_str()),
+                ) else {
+                    continue;
+                };
+                if name.is_empty() || name.starts_with('.') || name.contains('/') {
+                    continue;
+                }
+                let mut body: Vec<u8> = Vec::new();
+                let st = plat.http_get(&join(base, file), &cfg.api_key, &mut body, 65536);
+                if !matches!(st, Ok(200)) || body.is_empty() {
+                    continue;
+                }
+                let path = format!(
+                    "{}/{name}.md",
+                    cfg.skills_dir.as_deref().unwrap_or("skills")
+                );
+                if plat.fs_write(&path, &body).is_ok() {
+                    println!("synced '{name}' ({} bytes)", body.len());
+                    ok += 1;
+                }
+            }
+            println!("sync done: {ok}/{} skills", entries.len());
+            continue;
+        }
         if msg == "sessions" {
             println!("sessions in {SESSIONS_DIR}/:");
             let names: Vec<String> = std::fs::read_dir(SESSIONS_DIR)
